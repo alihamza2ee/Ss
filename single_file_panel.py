@@ -1,24 +1,21 @@
 #!/usr/bin/env python3
 """
-Screenshot Re-Edit Web Panel - Single File Complete Application
+Screenshot Re-Edit Web Panel - Railway Compatible Version
 Created by Ali HAMZA
-All-in-one solution for payment screenshot analysis and editing
+Simplified version without OpenCV for better deployment compatibility
 """
 
 import os
 import json
 import base64
-import cv2
-import numpy as np
 from flask import Flask, request, jsonify, render_template_string
 from werkzeug.utils import secure_filename
 import pytesseract
-from PIL import Image
+from PIL import Image, ImageEnhance, ImageFilter
 import google.generativeai as genai
 import re
 from datetime import datetime
 import logging
-import tempfile
 import io
 
 # Configure Flask app
@@ -48,26 +45,22 @@ def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 def preprocess_image_for_ocr(image_data):
-    """Preprocess image for better OCR results"""
+    """Preprocess image using only PIL/Pillow for better OCR"""
     try:
-        # Convert bytes to numpy array
-        nparr = np.frombuffer(image_data, np.uint8)
-        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        
-        if img is None:
-            return None
+        pil_image = Image.open(io.BytesIO(image_data))
         
         # Convert to grayscale
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        if pil_image.mode != 'L':
+            pil_image = pil_image.convert('L')
         
-        # Apply denoising
-        denoised = cv2.fastNlMeansDenoising(gray)
+        # Enhance contrast
+        enhancer = ImageEnhance.Contrast(pil_image)
+        pil_image = enhancer.enhance(1.5)
         
-        # Apply threshold for better contrast
-        _, thresh = cv2.threshold(denoised, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        # Enhance sharpness
+        enhancer = ImageEnhance.Sharpness(pil_image)
+        pil_image = enhancer.enhance(2.0)
         
-        # Convert back to PIL Image
-        pil_image = Image.fromarray(thresh)
         return pil_image
         
     except Exception as e:
@@ -75,17 +68,19 @@ def preprocess_image_for_ocr(image_data):
         return Image.open(io.BytesIO(image_data))
 
 def extract_with_tesseract(image_data):
-    """Extract text using Tesseract OCR"""
+    """Extract text using Tesseract OCR with PIL preprocessing"""
     try:
         # Preprocess image
         processed_image = preprocess_image_for_ocr(image_data)
-        if processed_image is None:
-            return ""
         
-        # Extract text with different PSM modes
-        configs = ['--psm 6', '--psm 4', '--psm 3']
+        # Extract text with different configurations
+        configs = [
+            '--psm 6 -c tessedit_char_whitelist=0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz:.,/-+ ',
+            '--psm 4',
+            '--psm 3'
+        ]
+        
         best_text = ""
-        
         for config in configs:
             try:
                 text = pytesseract.image_to_string(processed_image, config=config)
@@ -437,11 +432,11 @@ HTML_TEMPLATE = """
                 <h1 class="display-4 fw-bold text-primary">
                     <i class="fas fa-image me-3"></i>Screenshot Re-Edit Panel
                 </h1>
-                <p class="lead text-muted">AI-Powered Payment Screenshot Analysis & Editing</p>
+                <p class="lead text-muted">AI-Powered Payment Screenshot Analysis</p>
                 <div class="stats-card">
-                    <strong>🤖 AI Status:</strong> 
+                    <strong>🤖 Status:</strong> 
                     <span id="aiStatus">{{ 'Gemini AI Ready' if gemini_available else 'Tesseract OCR Only' }}</span>
-                    <br><small>Upload any payment screenshot to extract and edit information</small>
+                    | <strong>⚡ Version:</strong> Railway Compatible
                 </div>
             </div>
             
@@ -457,30 +452,21 @@ HTML_TEMPLATE = """
                                 <div class="upload-icon">
                                     <i class="fas fa-cloud-upload-alt"></i>
                                 </div>
-                                <h4>Drop your screenshot here</h4>
-                                <p class="text-muted mb-3">JazzCash, EasyPaisa, Bank Transfer receipts</p>
+                                <h4>Drop Payment Screenshot Here</h4>
+                                <p class="text-muted mb-3">JazzCash, EasyPaisa, Bank receipts</p>
                                 <input type="file" id="fileInput" accept="image/*" style="display: none;">
                                 <button class="btn btn-primary" onclick="document.getElementById('fileInput').click()">
                                     <i class="fas fa-folder-open me-2"></i>Choose Screenshot
                                 </button>
-                                <div class="mt-3">
-                                    <small class="text-muted">PNG, JPG, GIF, BMP, WEBP (Max: 16MB)</small>
-                                </div>
                             </div>
                             
                             <div class="loading-spinner" id="loadingSpinner">
                                 <div class="spinner-border spinner-border-lg" role="status"></div>
-                                <h5 class="mt-3">🤖 AI Processing Screenshot...</h5>
-                                <p class="text-muted">Extracting payment information using AI</p>
+                                <h5 class="mt-3">🤖 Processing with AI...</h5>
                             </div>
                             
-                            <div class="success-message" id="successMessage">
-                                <i class="fas fa-check-circle me-2"></i>Screenshot processed successfully!
-                            </div>
-                            
-                            <div class="error-message" id="errorMessage">
-                                <i class="fas fa-exclamation-triangle me-2"></i><span id="errorText"></span>
-                            </div>
+                            <div class="success-message" id="successMessage"></div>
+                            <div class="error-message" id="errorMessage"></div>
                         </div>
                     </div>
                 </div>
@@ -492,10 +478,10 @@ HTML_TEMPLATE = """
                 <div class="col-md-6">
                     <div class="card">
                         <div class="card-header">
-                            <h5 class="mb-0"><i class="fas fa-image me-2"></i>Original Screenshot</h5>
+                            <h5 class="mb-0"><i class="fas fa-image me-2"></i>Screenshot</h5>
                         </div>
                         <div class="card-body text-center">
-                            <img id="previewImage" class="preview-image" alt="Payment screenshot">
+                            <img id="previewImage" class="preview-image" alt="Screenshot">
                         </div>
                     </div>
                     
@@ -515,63 +501,48 @@ HTML_TEMPLATE = """
                 <div class="col-md-6">
                     <div class="card">
                         <div class="card-header">
-                            <h5 class="mb-0"><i class="fas fa-edit me-2"></i>Edit Payment Information</h5>
+                            <h5 class="mb-0"><i class="fas fa-edit me-2"></i>Edit Information</h5>
                         </div>
                         <div class="card-body">
                             <form id="editForm">
                                 <div class="field-group">
                                     <label class="field-label">💳 Transaction ID</label>
-                                    <input type="text" class="form-control" id="transaction_id" name="transaction_id" placeholder="TID or Reference number">
+                                    <input type="text" class="form-control" id="transaction_id" name="transaction_id">
                                 </div>
                                 
                                 <div class="field-group">
                                     <label class="field-label">💰 Amount</label>
-                                    <input type="text" class="form-control" id="amount" name="amount" placeholder="Rs. 0.00">
+                                    <input type="text" class="form-control" id="amount" name="amount">
                                 </div>
                                 
                                 <div class="field-group">
                                     <label class="field-label">📅 Date & Time</label>
-                                    <input type="text" class="form-control" id="date" name="date" placeholder="Date and time">
+                                    <input type="text" class="form-control" id="date" name="date">
                                 </div>
                                 
                                 <div class="field-group">
-                                    <label class="field-label">👤 Sender</label>
-                                    <input type="text" class="form-control" id="sender" name="sender" placeholder="From name">
+                                    <label class="field-label">👤 From</label>
+                                    <input type="text" class="form-control" id="sender" name="sender">
                                 </div>
                                 
                                 <div class="field-group">
-                                    <label class="field-label">👤 Receiver</label>
-                                    <input type="text" class="form-control" id="receiver" name="receiver" placeholder="To name">
-                                </div>
-                                
-                                <div class="field-group">
-                                    <label class="field-label">💸 Fee</label>
-                                    <input type="text" class="form-control" id="fee" name="fee" placeholder="Rs. 0.00">
-                                </div>
-                                
-                                <div class="field-group">
-                                    <label class="field-label">📱 Payment Method</label>
-                                    <input type="text" class="form-control" id="payment_method" name="payment_method" placeholder="JazzCash, EasyPaisa, etc.">
-                                </div>
-                                
-                                <div class="field-group">
-                                    <label class="field-label">✅ Status</label>
-                                    <input type="text" class="form-control" id="status" name="status" placeholder="Successful, Failed, Pending">
+                                    <label class="field-label">👤 To</label>
+                                    <input type="text" class="form-control" id="receiver" name="receiver">
                                 </div>
                                 
                                 <div class="field-group">
                                     <label class="field-label">📞 Phone Numbers</label>
-                                    <input type="text" class="form-control" id="phone_numbers" name="phone_numbers" placeholder="03xxxxxxxxx, 03xxxxxxxxx">
+                                    <input type="text" class="form-control" id="phone_numbers" name="phone_numbers">
                                 </div>
                                 
                                 <div class="field-group">
-                                    <label class="field-label">🏦 Bank/Reference</label>
-                                    <input type="text" class="form-control" id="reference" name="reference" placeholder="Additional reference">
+                                    <label class="field-label">✅ Status</label>
+                                    <input type="text" class="form-control" id="status" name="status">
                                 </div>
                                 
                                 <div class="text-center">
                                     <button type="submit" class="btn btn-success btn-lg">
-                                        <i class="fas fa-save me-2"></i>Save & Export Data
+                                        <i class="fas fa-download me-2"></i>Export JSON
                                     </button>
                                 </div>
                             </form>
@@ -653,7 +624,7 @@ HTML_TEMPLATE = """
                 loadingSpinner.style.display = 'none';
                 
                 if (data.success) {
-                    showSuccess();
+                    showSuccess('✅ Screenshot processed successfully!');
                     displayResults(data);
                 } else {
                     showError(data.error || 'Processing failed');
@@ -691,11 +662,8 @@ HTML_TEMPLATE = """
             document.getElementById('date').value = extractedData.date || '';
             document.getElementById('sender').value = extractedData.sender || '';
             document.getElementById('receiver').value = extractedData.receiver || '';
-            document.getElementById('fee').value = extractedData.fee || '';
-            document.getElementById('payment_method').value = extractedData.payment_method || '';
-            document.getElementById('status').value = extractedData.status || '';
             document.getElementById('phone_numbers').value = Array.isArray(extractedData.phone_numbers) ? extractedData.phone_numbers.join(', ') : '';
-            document.getElementById('reference').value = extractedData.reference || '';
+            document.getElementById('status').value = extractedData.status || '';
             
             resultsSection.style.display = 'block';
         }
@@ -723,23 +691,23 @@ HTML_TEMPLATE = """
             const url = URL.createObjectURL(dataBlob);
             const downloadLink = document.createElement('a');
             downloadLink.href = url;
-            downloadLink.download = `edited_payment_data_${new Date().getTime()}.json`;
+            downloadLink.download = `payment_data_${new Date().getTime()}.json`;
             downloadLink.click();
             URL.revokeObjectURL(url);
             
-            showSuccess('✅ Data exported successfully! JSON file downloaded.');
+            showSuccess('✅ Data exported successfully!');
         });
         
-        function showSuccess(message = '✅ Screenshot processed successfully!') {
+        function showSuccess(message) {
             hideMessages();
             successMessage.style.display = 'block';
-            successMessage.innerHTML = '<i class="fas fa-check-circle me-2"></i>' + message;
+            successMessage.innerHTML = message;
         }
         
         function showError(message) {
             hideMessages();
             errorMessage.style.display = 'block';
-            document.getElementById('errorText').textContent = message;
+            errorMessage.innerHTML = '<i class="fas fa-exclamation-triangle me-2"></i>' + message;
         }
         
         function hideMessages() {
@@ -776,25 +744,25 @@ def upload_file():
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"{timestamp}_{filename}"
         
-        logger.info(f"📸 Processing screenshot: {filename}")
+        logger.info(f"📸 Processing: {filename}")
         
         # Try Gemini first (if available)
         extraction_method = 'tesseract'
         extracted_data = {}
         
         if GEMINI_AVAILABLE:
-            logger.info("🤖 Attempting Gemini AI extraction...")
+            logger.info("🤖 Trying Gemini AI...")
             gemini_data = extract_with_gemini(file_data, file.content_type)
             if gemini_data and not gemini_data.get('error') and gemini_data.get('all_text'):
                 extracted_data = gemini_data
                 extraction_method = 'gemini'
-                logger.info("✅ Gemini extraction successful")
+                logger.info("✅ Gemini successful")
             else:
-                logger.warning("⚠️ Gemini extraction failed, using Tesseract")
+                logger.warning("⚠️ Gemini failed, using Tesseract")
         
         # Fallback to Tesseract
         if not extracted_data.get('all_text'):
-            logger.info("🔍 Using Tesseract OCR extraction...")
+            logger.info("🔍 Using Tesseract OCR...")
             tesseract_text = extract_with_tesseract(file_data)
             extracted_data = parse_text_manually(tesseract_text)
             extraction_method = 'tesseract'
@@ -803,7 +771,7 @@ def upload_file():
         image_b64 = base64.b64encode(file_data).decode()
         image_url = f"data:{file.content_type};base64,{image_b64}"
         
-        logger.info(f"✅ Extraction completed using {extraction_method}")
+        logger.info(f"✅ Completed with {extraction_method}")
         
         return jsonify({
             'success': True,
@@ -815,7 +783,7 @@ def upload_file():
         })
         
     except Exception as e:
-        logger.error(f"❌ Processing error: {e}")
+        logger.error(f"❌ Error: {e}")
         return jsonify({'error': f'Processing failed: {str(e)}'}), 500
 
 @app.route('/health')
@@ -825,18 +793,18 @@ def health_check():
         'status': 'healthy',
         'gemini_available': GEMINI_AVAILABLE,
         'timestamp': datetime.now().isoformat(),
-        'version': '1.0'
+        'version': 'railway-compatible-v1.0'
     })
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))  # Use environment PORT for hosting
-    print("🚀 Starting Ali HAMZA's Screenshot Re-Edit Panel...")
-    print(f"🤖 Gemini AI: {'✅ Available' if GEMINI_AVAILABLE else '❌ Not Available'}")
-    print(f"📱 Access at: http://localhost:{port}")
+    port = int(os.environ.get('PORT', 5000))
+    print("🚀 Ali HAMZA's Screenshot Panel (Railway Compatible)")
+    print(f"🤖 Gemini AI: {'✅ Ready' if GEMINI_AVAILABLE else '❌ Not Available'}")
+    print(f"📱 Port: {port}")
     print("=" * 50)
     
     app.run(
-        debug=False,  # Disable debug for production
+        debug=False,
         host='0.0.0.0',
         port=port,
         threaded=True
